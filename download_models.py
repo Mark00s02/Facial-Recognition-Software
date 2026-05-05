@@ -1,9 +1,9 @@
 """
-Downloads the age & gender Caffe models used by the overlay engine.
+Downloads all model files needed by the system.
 Run once:  python download_models.py
 
-Prototxt files are embedded directly (no download needed).
-Caffemodel binaries (~98 MB each) are fetched from GitHub mirrors.
+  DL face recognition (YuNet + SFace ONNX) — enables 80-95 % confidence scores
+  Age / Gender Caffe models                 — enables the overlay engine
 """
 
 import os
@@ -107,7 +107,26 @@ CAFFEMODEL_SOURCES = {
     ],
 }
 
-MIN_MODEL_BYTES = 50 * 1024 * 1024   # a real caffemodel is ~98 MB; reject tiny files
+MIN_MODEL_BYTES    = 50 * 1024 * 1024   # a real caffemodel is ~98 MB; reject tiny files
+MIN_ONNX_BYTES_DET = 300 * 1024         # YuNet  ~400 KB
+MIN_ONNX_BYTES_REC = 30  * 1024 * 1024 # SFace  ~37 MB
+
+# ── DL (YuNet + SFace) ONNX model sources ────────────────────────────────────
+ONNX_SOURCES = {
+    "face_detection_yunet_2023mar.onnx": {
+        "min_bytes": MIN_ONNX_BYTES_DET,
+        "urls": [
+            "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+            "https://github.com/ShiqiYu/libfacedetection.train/raw/master/tasks/task1/onnx/yunet.onnx",
+        ],
+    },
+    "face_recognition_sface_2021dec.onnx": {
+        "min_bytes": MIN_ONNX_BYTES_REC,
+        "urls": [
+            "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+        ],
+    },
+}
 
 
 def _progress(block_num, block_size, total_size):
@@ -122,14 +141,14 @@ def _progress(block_num, block_size, total_size):
         print(f"\r    {mb:.1f} MB downloaded…", end="", flush=True)
 
 
-def _try_download(url: str, dest: str) -> bool:
+def _try_download(url: str, dest: str, min_bytes: int) -> bool:
     """Download url → dest. Returns True on success."""
     tmp = dest + ".part"
     try:
         urllib.request.urlretrieve(url, tmp, reporthook=_progress)
         print()
         size = os.path.getsize(tmp)
-        if size < MIN_MODEL_BYTES:
+        if size < min_bytes:
             print(f"    ✗  File too small ({size} bytes) — likely a redirect page, skipping.")
             os.remove(tmp)
             return False
@@ -146,7 +165,36 @@ def download():
     os.makedirs(MODELS_DIR, exist_ok=True)
     all_ok = True
 
-    # ── Write prototxt files directly (no network needed) ────────────────────
+    # ── DL face recognition models (YuNet + SFace ONNX) ──────────────────────
+    print("── Deep Learning Face Recognition (YuNet + SFace) ──")
+    for filename, info in ONNX_SOURCES.items():
+        dest      = os.path.join(MODELS_DIR, filename)
+        min_bytes = info["min_bytes"]
+        if os.path.exists(dest) and os.path.getsize(dest) >= min_bytes:
+            mb = os.path.getsize(dest) / 1_048_576
+            print(f"  ✓  {filename} already exists ({mb:.1f} MB).")
+            continue
+
+        size_hint = "~0.4 MB" if "yunet" in filename else "~37 MB"
+        print(f"  Downloading  {filename}  ({size_hint}) …")
+        success = False
+        for i, url in enumerate(info["urls"], 1):
+            print(f"    Mirror {i}/{len(info['urls'])}: {url[:80]}…")
+            if _try_download(url, dest, min_bytes):
+                mb = os.path.getsize(dest) / 1_048_576
+                print(f"  ✓  Saved ({mb:.1f} MB)")
+                success = True
+                break
+
+        if not success:
+            print(f"\n  ✗  Could not download {filename}.")
+            print(f"     Manually place the file in:  {os.path.abspath(MODELS_DIR)}/")
+            print(f"     Source: https://github.com/opencv/opencv_zoo")
+            all_ok = False
+        print()
+
+    # ── Age / Gender Caffe prototxt files (embedded) ──────────────────────────
+    print("── Age / Gender Overlay Models ──")
     for filename, content in [
         ("deploy_age.prototxt",    DEPLOY_AGE),
         ("deploy_gender.prototxt", DEPLOY_GENDER),
@@ -161,7 +209,7 @@ def download():
 
     print()
 
-    # ── Download caffemodel binaries ──────────────────────────────────────────
+    # ── Age / Gender Caffe binary weights ─────────────────────────────────────
     for filename, mirrors in CAFFEMODEL_SOURCES.items():
         dest = os.path.join(MODELS_DIR, filename)
         if os.path.exists(dest) and os.path.getsize(dest) >= MIN_MODEL_BYTES:
@@ -172,7 +220,7 @@ def download():
         success = False
         for i, url in enumerate(mirrors, 1):
             print(f"    Mirror {i}/{len(mirrors)}: {url[:72]}…")
-            if _try_download(url, dest):
+            if _try_download(url, dest, MIN_MODEL_BYTES):
                 mb = os.path.getsize(dest) // 1_048_576
                 print(f"  ✓  Saved ({mb} MB)")
                 success = True
@@ -180,27 +228,25 @@ def download():
 
         if not success:
             print(f"\n  ✗  All mirrors failed for {filename}.")
-            print("     Manual download instructions:")
-            print("     1. Open your browser and search: 'age_net.caffemodel download github'")
-            print("     2. Or try: https://talhassner.github.io/home/publication/2015_CVPR")
-            print(f"     3. Place the file in:  {os.path.abspath(MODELS_DIR)}/")
+            print("     Manual download: search 'age_net.caffemodel download github'")
+            print(f"     Place the file in:  {os.path.abspath(MODELS_DIR)}/")
             all_ok = False
-
         print()
 
     return all_ok
 
 
 if __name__ == "__main__":
-    print("=" * 56)
-    print("  Age & Gender Model Downloader")
-    print("=" * 56)
+    print("=" * 60)
+    print("  Facial Recognition System — Model Downloader")
+    print("=" * 60)
     ok = download()
-    print("=" * 56)
+    print("=" * 60)
     if ok:
-        print("  All models ready.  Age/Gender overlay is enabled.")
+        print("  All models ready.")
+        print("  ◈ DL mode (YuNet + SFace) — 80-95 % confidence")
+        print("  ◈ Age / Gender overlay enabled")
     else:
-        print("  Some files missing — Age/Gender overlay will be")
-        print("  disabled until models are in the 'models/' folder.")
-    print("=" * 56)
+        print("  Some files are missing — check messages above.")
+    print("=" * 60)
     input("\nPress Enter to close…")
